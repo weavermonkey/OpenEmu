@@ -1,0 +1,55 @@
+# Test build for the fast-forward toggle/speed branch. Not part of the PR.
+name: FF test build (master-based)
+
+on:
+  push:
+    branches: [ff-ci-master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Use HTTPS for SSH submodule URLs
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check out submodules (SDK and OpenEmuKit from forks)
+        run: |
+          git config -f .gitmodules submodule.OpenEmu-SDK.url https://github.com/weavermonkey/OpenEmu-SDK.git
+          git config -f .gitmodules submodule.OpenEmuKit.url https://github.com/weavermonkey/OpenEmuKit.git
+          git submodule sync --recursive
+          git submodule update --init --recursive --jobs 8
+          git submodule status OpenEmu-SDK OpenEmuKit
+      - name: Set Xcode version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+      - name: Build OpenEmu
+        run: |
+          set -o pipefail
+          xcodebuild -workspace OpenEmu.xcworkspace -scheme OpenEmu -configuration Release \
+            -sdk macosx -arch x86_64 -derivedDataPath DerivedData \
+            -skipPackagePluginValidation -skipMacroValidation \
+            2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build.log
+          test -x DerivedData/Build/Products/Release/OpenEmu.app/Contents/MacOS/OpenEmu
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
+      - name: Zip OpenEmu
+        working-directory: DerivedData/Build/Products/Release
+        run: |
+          codesign --remove-signature OpenEmu.app || true
+          ditto -c -k --keepParent OpenEmu.app OpenEmu-ff.zip
+      - name: Upload OpenEmu
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenEmu-ff
+          path: DerivedData/Build/Products/Release/OpenEmu-ff.zip
+          retention-days: 7
